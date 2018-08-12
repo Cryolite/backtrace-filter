@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PS4='+${BASH_SOURCE[0]}:$LINENO: '
+if [[ -t 1 ]] && type -t tput >/dev/null; then
+  if (( "$(tput colors)" == 256 )); then
+    PS4='$(tput setaf 10)'$PS4'$(tput sgr0)'
+  else
+    PS4='$(tput setaf 2)'$PS4'$(tput sgr0)'
+  fi
+fi
+
+new_args=()
+while (( $# > 0 )); do
+  arg="$1"
+  shift
+  case "$arg" in
+  --debug)
+    debug=yes
+    new_args+=("$@")
+    break
+    ;;
+  --)
+    new_args+=(-- "$@")
+    break
+    ;;
+  *)
+    new_args+=("$arg")
+    ;;
+  esac
+done
+set -- "${new_args[@]}"
+unset new_args
+if [[ ${debug-no} == yes ]]; then
+  set -x
+fi
+unset debug
+
+script_dir="$(readlink -e "${BASH_SOURCE[0]}")"
+script_dir="$(dirname "$script_dir")"
+BACKTRACE_FILTER_ROOT_DIR="$(readlink -e "$script_dir/..")"
+
+
+PROGRAM_NAME=bootstrap
+
+function print_usage ()
+{
+  cat <<'EOF'
+Usage: bootstrap [OPTION]...
+Bootstrap the project.
+
+  -h, --help                 Display this help and exit.
+EOF
+}
+
+function print_error_message ()
+{
+  if [[ -t 2 ]] && type -t tput >/dev/null; then
+    if (( "$(tput colors)" == 256 )); then
+      echo "$(tput setaf 9)$1$(tput sgr0)" >&2
+    else
+      echo "$(tput setaf 1)$1$(tput sgr0)" >&2
+    fi
+  else
+    echo "$1" >&2
+  fi
+}
+
+function die_with_logic_error ()
+{
+  set +x
+  print_error_message "$PROGRAM_NAME: error: A logic error."
+  exit 1
+}
+
+function die_with_user_error ()
+{
+  set +x
+  print_error_message "$PROGRAM_NAME: error: $1"
+  print_error_message "Try \`$PROGRAM_NAME --help' for more information."
+  exit 1
+}
+
+function die_with_runtime_error ()
+{
+  set +x
+  print_error_message "$PROGRAM_NAME: error: $1"
+  exit 1
+}
+
+if getopt -T; (( $? != 4 )); then
+  set +x
+  print_error_message "build: error: \`getopt' is not an enhanced version."
+  exit 1
+fi
+opts="$(getopt -n "$PROGRAM_NAME" -l help -- h "$@")"
+eval set -- "$opts"
+
+expect_rest_args=no
+while (( $# > 0 )); do
+  arg="$1"
+  shift
+  if [[ $expect_rest_args == yes ]]; then
+    die_with_user_error "An invalid argument \`$arg'."
+  fi
+  case "$arg" in
+  -h|--help)
+    set +x
+    print_usage
+    exit 0
+    ;;
+  --)
+    expect_rest_args=yes
+    ;;
+  *)
+    die_with_user_error "An invalid argument \`$arg'."
+    ;;
+  esac
+done
+unset expect_rest_args
+
+prefix="$BACKTRACE_FILTER_ROOT_DIR/.local"
+
+"$BACKTRACE_FILTER_ROOT_DIR/ext/gcc/install" "--prefix=$prefix" "--source-dir=$prefix/src/gcc" --clobber-source-dir
+
+export PATH="$prefix/bin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$prefix/lib64:$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+"$BACKTRACE_FILTER_ROOT_DIR/ext/libbacktrace/install" "--prefix=$prefix" "--source-dir=$prefix/src/libbacktrace" --clobber-source-dir
+
+"$BACKTRACE_FILTER_ROOT_DIR/ext/boost/download" "--source-dir=$prefix/src/boost" --clobber-source-dir
+
+temp_dir="$(mktemp -d)"
+
+mkdir "$temp_dir/build"
+(cd "$prefix/src/boost" && ./b2 --build-type=complete --build-dir="$temp_dir/build" --layout=tagged --with-stacktrace variant=debug threading=multi cxxflags=-std=c++17 cflags=-fsanitize=undefined linkflags=-fsanitize=undefined define=_GLIBCXX_DEBUG define=_GLIBCXX_DEBUG_PEDANTIC stage)
+rm -r "$temp_dir/build"
+
+mkdir "$temp_dir/build"
+(cd "$prefix/src/boost" && ./b2 --stagedir="$prefix/src/boost/stage/asan" --build-type=complete --build-dir="$temp_dir/build" --layout=tagged --with-stacktrace variant=debug threading=multi cxxflags=-std=c++17 cflags=-fsanitize=address linkflags=-fsanitize=address cflags=-fsanitize=undefined linkflags=-fsanitize=undefined define=_GLIBCXX_DEBUG define=_GLIBCXX_DEBUG_PEDANTIC stage)
+rm -r "$temp_dir/build"
+
+rm -r "$temp_dir"

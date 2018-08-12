@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PS4='+${BASH_SOURCE[0]}:$LINENO: '
+if [[ -t 1 ]] && type -t tput >/dev/null; then
+  if (( "$(tput colors)" == 256 )); then
+    PS4='$(tput setaf 10)'$PS4'$(tput sgr0)'
+  else
+    PS4='$(tput setaf 2)'$PS4'$(tput sgr0)'
+  fi
+fi
+
+new_args=()
+while (( $# > 0 )); do
+  arg="$1"
+  shift
+  case "$arg" in
+  --debug)
+    debug=yes
+    new_args+=("$@")
+    break
+    ;;
+  --)
+    new_args+=(-- "$@")
+    break
+    ;;
+  *)
+    new_args+=("$arg")
+    ;;
+  esac
+done
+set -- "${new_args[@]}"
+unset new_args
+if [[ ${debug-no} == yes ]]; then
+  set -x
+fi
+unset debug
+
+script_dir="$(readlink -e "${BASH_SOURCE[0]}")"
+script_dir="$(dirname "$script_dir")"
+BACKTRACE_FILTER_ROOT_DIR="$(readlink -e "$script_dir/..")"
+
+prefix="$BACKTRACE_FILTER_ROOT_DIR/.local"
+export PATH="$prefix/bin${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="$prefix/src/boost/stage/lib:$prefix/lib64:$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+cd "$BACKTRACE_FILTER_ROOT_DIR/test"
+
+rm -f input output
+
+g++ -std=c++17 -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -Og -g -fsanitize=undefined -pthread libsegfault.cpp -o libsegfault
+SEGFAULT_SIGNALS=all catchsegv ./libsegfault &>libsegfault.txt || true
+
+g++ -std=c++17 -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -Og -g -fsanitize=address -fsanitize=undefined -pthread asan.cpp -o asan
+./asan &>asan.txt || true
+
+g++ -std=c++17 -I"$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost" -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -Og -g -fsanitize=address -fsanitize=undefined -pthread -rdynamic boost_stacktrace.cpp "$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost/stage/lib/libboost_stacktrace_basic-mt-d.so" -ldl -o boost_stacktrace_basic
+./boost_stacktrace_basic &>boost_stacktrace_basic.txt
+
+g++ -std=c++17 -I"$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost" -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -DBOOST_STACKTRACE_USE_BACKTRACE -Og -g -fsanitize=address -fsanitize=undefined -pthread -rdynamic boost_stacktrace.cpp "$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost/stage/lib/libboost_stacktrace_backtrace-mt-d.so" -ldl -lbacktrace -o boost_stacktrace_backtrace
+./boost_stacktrace_backtrace &>boost_stacktrace_backtrace.txt
+
+g++ -std=c++17 -I"$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost" -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -DBOOST_STACKTRACE_USE_ADDR2LINE -Og -g -fsanitize=address -fsanitize=undefined -pthread -rdynamic boost_stacktrace.cpp "$BACKTRACE_FILTER_ROOT_DIR/.local/src/boost/stage/lib/libboost_stacktrace_addr2line-mt-d.so" -ldl -o boost_stacktrace_addr2line
+./boost_stacktrace_addr2line &>boost_stacktrace_addr2line.txt
+
+echo '========== libsegfault.txt ==========' >>input
+cat libsegfault.txt >>input
+echo '========== asan.txt ==========' >>input
+cat asan.txt >>input
+echo '========== boost_stacktrace_basic.txt ==========' >>input
+cat boost_stacktrace_basic.txt >>input
+echo '========== boost_stacktrace_backtrace.txt ==========' >>input
+cat boost_stacktrace_backtrace.txt >>input
+echo '========== boost_stacktrace_addr2line.txt ==========' >>input
+cat boost_stacktrace_addr2line.txt >>input

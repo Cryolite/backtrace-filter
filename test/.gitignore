@@ -1,0 +1,10 @@
+/libsegfault
+/libsegfault.txt
+/asan
+/asan.txt
+/boost_stacktrace_basic
+/boost_stacktrace_basic.txt
+/boost_stacktrace_backtrace
+/boost_stacktrace_backtrace.txt
+/boost_stacktrace_addr2line
+/boost_stacktrace_addr2line.txt
